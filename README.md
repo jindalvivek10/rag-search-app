@@ -182,56 +182,59 @@ This repository uses a decoupled frontend-backend pattern designed to run secure
  └── cloudbuild.yaml          # Google CI/CD pipeline
 ```
 
-### 🐍 Backend Gateway (`backend/main.py`)
-The backend is written in **FastAPI** to handle two essential, secure requirements:
-1. **Cloud Security (IAM Proxy)**: Web browsers cannot safely store Google Service Account keys. By running a FastAPI middleware layer inside Cloud Run, the application uses **Workload Identity/Metadata credentials** to authenticate search queries securely on the server-side, hiding private details from visitors.
-2. **Result Parsing & Normalization**: The Vertex AI `SearchServiceClient` returns structured, deep metadata configurations (containing page bounding coordinates, structural tokens, and source indexes). FastAPI intercepts this response, parses out the essential segments, and flattens the JSON into an optimized schema.
+## 🏗️ Deep-Dive Code Architecture (No Jargon)
 
-#### Search Call Pipeline:
+This application uses a classic "Customer-Waiter-Chef" pattern to keep your security keys completely hidden from hackers while parsing messy raw data into a fast, beautiful user interface.
+
+```
+[ Your Screen ]  <───(Clean Data)───>  [ FastAPI Backend ]  <───(Secure SDK)───>  [ Google Vertex AI ]
+ (The Customer)                          (The Waiter)                              (The Chef)
+```
+
+### 🐍 1. The Backend Gateway (`backend/main.py`)
+
+The backend is built with **FastAPI** to execute two essential, secure jobs:
+
+#### A. Keeping Cloud Access Keys Safe 🔒
+To query Vertex AI, the code must make authenticated API calls. 
+* **The Security Risk**: If our React frontend queried Google directly, our private cloud access credentials would be packed into the browser's source code where anyone could inspect and steal them.
+* **The Solution**: The frontend talks only to our FastAPI backend. The backend runs securely inside Google Cloud Run and utilizes **Metadata Service Identities** to automatically obtain temporary execution credentials. Your cloud access configurations never touch the user’s computer.
+
+#### B. Clearing Out the Clutter (Data Normalization) 🧹
+Google's API returns a massive, confusing structure filled with pixel coordinate boxes, metadata confidence scores, and layout arrays. The backend loops through this data, strips out the noise, and maps it to a neat, simplified format before sending it to your screen:
+
 ```python
-# Conceptual flow inside backend/main.py
-from fastapi import FastAPI
-from google.cloud import discoveryengine_v1 as discoveryengine
-
-app = FastAPI()
-client = discoveryengine.SearchServiceClient()
-
-@app.post("/api/search")
-async def search_index(query: str):
-    # Construct paths dynamically from environment variables
-    serving_config = client.project_location_collection_engine_serving_config_path(
-        project="vjindal-project-ai-basic",
-        location="global",
-        collection="default_collection",
-        engine="rag-search-app",
-        serving_config="default_serving_config"
-    )
-
-    request = discoveryengine.SearchRequest(
-        serving_config=serving_config,
-        query=query,
-        page_size=3,
-        content_search_spec={
-            "extractive_content_spec": {"max_extractive_segment_count": 2},
-            "summary_spec": {
-                "summary_result_count": 5, 
-                "include_citations": True
-            }
+# Exact request constructed inside main.py
+request = discoveryengine.SearchRequest(
+    serving_config=serving_config,
+    query=request_data.[...](asc_slot://start-slot-14)query,
+    page_size=5,
+    content_search_spec={
+        "extractive_content_spec": {
+            "max_extractive_segment_count": 1 # Pull exact matching sentences
+        },
+        "summary_spec": {
+            "include_citations": True # Instruct Gemini to insert[...](asc_slot://start-slot-15), citation markers
         }
-    )
-    
-    response = await client.search(request)
-    return parse_and_flatten_response(response) # Converts nested models into readable React schemas
+    }
+)
 ```
 
 ---
 
-### ⚛️ Frontend Single-Page App (`frontend/`)
-The frontend is a custom search dashboard built using **React**. It is compiled into pure HTML/CSS/JavaScript and served statically from our Python web server (`main.py` serving `/frontend/dist`).
+### ⚛️ 2. The Frontend Client (`frontend/src/`)
 
-#### Core UX Mechanisms:
-1. **Dual-State Display**:
-   * **Grounded Summary State**: Displays the synthetic answer directly compiled by the LLM. [...](asc_slot://start-slot-23)It shows inline markdown links mapped to reference coordinates (e.g., ``[...](asc_slot://start-slot-24), ``).
-   * **Extractive Chunks List**: Lists individual paragraphs matching semantic criteria, ranking documents by factual relevance.
-2. **Interactive Cite Handler**: Clicking an inline citation card dynamically parses coordinates inside the viewport, opening a PDF modal to show you the original file, and highlighting the exact page where Gemini found that fact.
-3. **Ingestion Upload Utility**: The UI has an upload interface which streams local PDFs to the backend's `/api/upload` endpoint, automatically inserting the files into the `gs://vjindal-vertex-rag-data` bucket.
+The frontend is a single-page application built with **React** inside the `/frontend` directory. It coordinates what you see on the page.
+
+#### A. State Hooks (`useState`)
+React uses standard hooks to keep track of your query and loading state as they change in real-time:
+* `query`: What you are searching for.
+* `summary`: The markdown-based answer returned by Gemini.
+* `results`: The matching PDF sources listed in the sidebar.
+
+#### B. [...](asc_slot://start-slot-17)The Interactive Citation Parser 🏷️
+When Gemini returns a summary featuring bracketed citations like `"Google Cloud grew by 20%"`, React uses a **Regular Expression** (`/\[(\d+)\]/g`) to parse the string:
+1. It splits the sentence into raw text strings and numeric citations.
+2. It wraps the citations into interactive `<button>` elements.
+3. When clicked, React matches the citation index to the corresponding source card on your screen, highlights its border in bright blue, and scrolls it directly into view so you can verify the information instantly.
+view.
