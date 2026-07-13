@@ -1,3 +1,4 @@
+Code is at  ```https://github.com/kkrishnan90/vertex-ai-search-agent-builder-demo/```
 # 🔍 Google-Quality RAG Search Portal with Vertex AI
 
 A modern, production-grade Retrieval-Augmented Generation (RAG) system. This full-stack application enables users to search through complex, unstructured PDF catalogs and obtain natural, grounded answers from Gemini, complete with interactive inline citations and source metadata linking.
