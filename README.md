@@ -238,3 +238,142 @@ When Gemini returns a summary featuring bracketed citations like `"Google Cloud 
 2. It wraps the citations into interactive `<button>` elements.
 3. When clicked, React matches the citation index to the corresponding source card on your screen, highlights its border in bright blue, and scrolls it directly into view so you can verify the information instantly.
 view.
+
+
+
+## 🏗️ How the Code Works (No Jargon)
+
+This application uses a classic **"Customer-Waiter-Chef"** pattern to keep your private cloud credentials hidden from hackers while parsing messy raw data into a fast, beautiful user interface.
+
+```
+┌─────────────────────────────────┐      ┌─────────────────────────────┐      ┌───────────────────────────────┐
+│       CUSTOMER (Frontend)       │ ───> │      WAITER (Backend)       │ ───> │       CHEF (Vertex AI)        │
+│    "What is our Cloud revenue?" │      │    Passes query securely    │      │  Processes vector RAG search  │
+└─────────────────────────────────┘      └─────────────────────────────┘      └───────────────────────────────┘
+                 ▲                                      │                                     │
+                 │                                      ▼                                     ▼
+┌─────────────────────────────────┐      ┌─────────────────────────────┐      ┌───────────────────────────────┐
+│       CUSTOMER (Frontend)       │ <─── │      WAITER (Backend)       │ <─── │       CHEF (Vertex AI)        │
+│   Renders clean, highlighted    │      │    Strips away raw clutter   │      │ Sends raw JSON metadata tree  │
+│      answers and citations      │      │     and plates data nicely  │      │   (coordinates & paragraphs)  │
+└─────────────────────────────────┘      └─────────────────────────────┘      └───────────────────────────────┘
+```
+
+---
+
+### ⚛️ 1. How the React Frontend (FE) is Built
+
+The frontend is a modern web application built using **React** and **JSX** inside the `/frontend` directory.
+
+#### A. Development vs. Production Compilation
+* **In Development**: React runs on a local development server (typically port `5173`) and compiles your changes instantly using Hot Module Replacement (HMR).
+* **For Production Build**: Running `npm run build` triggers a compiler (like Vite) that takes your React code, compresses it, and flattens it into a **single folder of static assets** (`frontend/dist`). This folder contains only one `index.html` file, a highly optimized JavaScript bundle, and a minified CSS stylesheet.
+
+#### B. State Management (The Brain of the Screen)
+React uses **state hooks** (`useState`) to dynamically track changes on your screen:
+
+| State Variable | What It Tracks | Visual Result on Your Screen |
+| :--- | :--- | :--- |
+| **`query`** | The raw text typed into the search bar. | Reflects typing in the search bar. |
+| **`loading`** | A Boolean flag (`true` \| `false`). | Displays a loading spinner while the API is processing. |
+| **`summary`** | The natural language summary from Gemini. | Rendered in the primary reading card at the top. |
+| **`results`** | A list of matching source documents. | Rendered as a sidebar of clickable cards. |
+
+---
+
+### 🐍 2. How the FastAPI Backend API is Written
+
+The backend is a high-performance Python web server written in **FastAPI** (`backend/main.py`). It has two primary responsibilities:
+
+#### A. Serving the Static Frontend (Avoiding CORS Blockades)
+Normally, if your browser attempts to load the UI from port `3000` but sends requests to port `8080`, security mechanisms (CORS) block the request. FastAPI solves this in production by **mounting** your compiled React production bundle directly onto the root URL:
+```python
+# FastAPI serves your compiled React site directly on the "/" path
+app.mount("/", StaticFiles(directory="frontend/dist", html=True), name="static")
+```
+When you load your deployment URL, FastAPI hands your browser the static `index.html` file. The frontend and backend run seamlessly under **one single URL**.
+
+#### B. Guarding API Routes & Credentials 🔒
+Web browsers cannot safely store Google Service Account keys—hackers could easily extract them from your code. FastAPI acts as a security proxy:
+* React sends requests to `POST /api/search`.
+* The backend runs securely inside Google Cloud Run and utilizes **Metadata Service Identities** to automatically obtain temporary access tokens to query Vertex AI. No physical passwords or private keys are ever sent to your browser.
+* The API utilizes the clean, top-level Google Cloud SDK:
+```python
+from google.cloud import discoveryengine  # Dynamically points to the latest stable release (v1)
+```
+
+---
+
+### 🔄 3. The Lifecycle of a Query (Step-by-Step Control Flow)
+
+#### Step 1: The Trigger
+You type *"What was Google's Cloud revenue in 2025?"* and press Enter.
+1. React sets `setLoading(true)` (rendering a loading spinner).
+2. React packs the query and sends an HTTP request to the backend:
+   ```javascript
+   fetch("/api/search", {
+     method: "POST",
+     headers: { "Content-Type": "application/json" },
+     body: JSON.stringify({ query: "What was Google's Cloud revenue in 2025?" })
+   })
+   ```
+
+#### Step 2: The Security Handshake
+1. FastAPI intercepts the request at `/api/search` and instantiates the `SearchServiceClient`.
+2. It maps the incoming query into a formal Google `SearchRequest` targeting your specific cloud project (`vjindal-project-ai-basic`) and engine (`rag-search-app`).
+3. The backend forwards the request securely to Google's internal APIs.
+
+#### Step 3: Vertex AI Double-Pass Execution
+Google's server runs a **two-step RAG pipeline**:
+1. **Semantic Search (Retrieval)**: It searches the vector index of your GCS-hosted PDFs to locate the exact paragraphs that mention *"Google Cloud"* and *"2025 revenue"*.
+2. **Grounded Generation (Gemini LLM)**: It feeds those parsed paragraphs directly into the Gemini LLM and says: *"Answer the user's question using ONLY these facts. Insert bracketed citations like [1] to show which document supported which fact."*
+
+#### Step 4: Data Clean-Up (Raw vs. Flat Payload)
+* **What Vertex AI returns to your Backend (Raw Metadata Tree)**:
+  ```json
+  {
+    "summary": {
+      "summary_text": "In 2025, Google Cloud revenue grew significantly, reaching $45B [1].",
+      "summary_with_metadata": {
+        "citation_metadata": {
+          "citations": [{"start_index": 59, "end_index": 63, "sources": [{"reference_index": "0"}]}]
+        }
+      }
+    },
+    "results": [
+      {
+        "id": "doc_abc123",
+        "document": {
+          "name": "projects/.../documents/doc_abc123",
+          "derived_struct_data": {
+            "title": "Alphabet_2025_Earnings.pdf",
+            "link": "gs://vjindal-vertex-rag-data/Alphabet_2025_Earnings.pdf",
+            "snippets": [{"snippet": "Google Cloud segment revenue was $45,000,000,000 for the year..."}]
+          }
+        }
+      }
+    ]
+  }
+  ```
+
+* **What your Backend returns to your Screen (Cleaned & Flattened)**:
+  The backend filters out pixel locations, mapping ranges, and confidence metrics, returning only what matters:
+  ```json
+  {
+    "summary": "In 2025, Google Cloud revenue grew significantly, reaching $45B [1].",
+    "results": [
+      {
+        "title": "Alphabet_2025_Earnings.pdf",
+        "link": "gs://vjindal-vertex-rag-data/Alphabet_2025_Earnings.pdf",
+        "snippet": "Google Cloud segment revenue was $45,000,000,000 for the year..."
+      }
+    ]
+  }
+  ```
+
+#### Step 5: Screen Rendering & Interactive Citations ✨
+1. React receives the clean JSON packet and updates its states: `setSummary(data.summary)` and `setResults(data.results)`.
+2. React sets `setLoading(false)` (the loading spinner vanishes, and the results are painted on screen).
+3. **The Citation Parser**: React scans the summary string, finds the characters `[1]` using a regular expression (`/\[(\d+)\]/g`), and replaces them with a clickable HTML `<button>` badge.
+4. **Interactive Scroll**: When you click the `[1]` button, React matches the index, highlights the first source document card's border in a bright blue accent, and scrolls it directly into view so you can verify the information instantly!
+```
